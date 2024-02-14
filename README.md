@@ -18,3 +18,9 @@ The [oauth2 module](https://github.com/go-oauth2/oauth2) was used to develop OAu
 - `viper` was used to configure the application. I also created a `config.yaml` file for local development. Configuration values can be overridden by environment variables. Currently there are these variables: `HTTP_PORT`, `HTTP_TIMEOUT`, `JWT_ACCESS_TOKEN_EXPIRES_IN` and `JWT_SECRET`. For a production environment, you definitely need to override `JWT_SECRET`.
 - Since `memory` storage was used to store tokens, `replicas` in `deployment.yaml` was set to 1.
 - The Postman collection was created to simplify testing.
+
+## Run
+### Local
+```
+make run
+```
