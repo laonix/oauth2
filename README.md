@@ -24,3 +24,13 @@ The [oauth2 module](https://github.com/go-oauth2/oauth2) was used to develop OAu
 ```
 make run
 ```
+### Docker
+```
+make rum-img
+```
+### minikube
+```
+make build-img
+minikube image load oauth:1.0.0
+kubectl apply -f deploy.yaml
+```
