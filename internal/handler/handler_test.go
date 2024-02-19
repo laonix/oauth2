@@ -3,13 +3,13 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/gorilla/mux"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
-	"oauth/internal/config"
-	"oauth/internal/service/auth"
+	"oauth2/internal/config"
+	"oauth2/internal/service/auth"
 
 	"github.com/go-oauth2/oauth2/v4/models"
 	"github.com/go-oauth2/oauth2/v4/store"
@@ -43,7 +43,7 @@ func TestGenerateToken(t *testing.T) {
 		Secret: mockClientSecret,
 	})
 
-	srv := auth.New(time.Duration(cfg.JWT.AccessTokenExpiresIn), []byte(cfg.JWT.Secret), tokenRepo, clientRepo)
+	srv := auth.NewManager(cfg, tokenRepo, clientRepo)
 
 	httpHandler := New(srv)
 
@@ -133,7 +133,7 @@ func TestValidateTokenMiddleware(t *testing.T) {
 		Secret: mockClientSecret,
 	})
 
-	srv := auth.New(time.Duration(cfg.JWT.AccessTokenExpiresIn), []byte(cfg.JWT.Secret), tokenRepo, clientRepo)
+	srv := auth.NewManager(cfg, tokenRepo, clientRepo)
 
 	httpHandler := New(srv)
 
@@ -194,9 +194,9 @@ func TestValidateTokenMiddleware(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := tt.prepareRequest()
 
-			endpoint := httpHandler.validateTokenMiddleware(httpHandler.secure)
+			endpoint := httpHandler.validateTokenMiddleware(http.HandlerFunc(httpHandler.secure))
 
-			endpoint(tt.w, req)
+			endpoint.ServeHTTP(tt.w, req)
 
 			if tt.w.Code != tt.expectedStatusCode {
 				t.Errorf("got status %d but wanted %d\n", tt.w.Code, tt.expectedStatusCode)
@@ -206,17 +206,16 @@ func TestValidateTokenMiddleware(t *testing.T) {
 }
 
 func TestRecoveryMiddleware(t *testing.T) {
-	mux := http.NewServeMux()
+	r := mux.NewRouter()
+	r.Use(recoveryMiddleware)
 
-	mux.HandleFunc("/panic", func(w http.ResponseWriter, r *http.Request) {
+	r.HandleFunc("/panic", func(w http.ResponseWriter, r *http.Request) {
 		panic("panic")
 	})
 
-	mux.HandleFunc("/recover", func(w http.ResponseWriter, r *http.Request) {
+	r.HandleFunc("/recover", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-
-	endpoint := recoveryMiddleware(mux)
 
 	tests := []struct {
 		name               string
@@ -246,7 +245,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := tt.prepareRequest()
 
-			endpoint.ServeHTTP(tt.w, req)
+			r.ServeHTTP(tt.w, req)
 
 			if tt.w.Code != tt.expectedStatusCode {
 				t.Errorf("got status %d but wanted %d\n", tt.w.Code, tt.expectedStatusCode)

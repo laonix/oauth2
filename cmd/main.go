@@ -2,58 +2,94 @@ package main
 
 import (
 	"context"
-	"log"
-	"os"
+	golog "log"
+	"net/http"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/go-oauth2/oauth2/v4/models"
 	"github.com/go-oauth2/oauth2/v4/store"
+	"github.com/oklog/run"
+	"github.com/pkg/errors"
 
-	"oauth/internal/config"
-	"oauth/internal/handler"
-	"oauth/internal/server"
-	"oauth/internal/service/auth"
+	"oauth2/internal/config"
+	"oauth2/internal/handler"
+	"oauth2/internal/logger"
+	"oauth2/internal/service/auth"
 )
 
 func main() {
+	// load config
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		panic(err)
+		golog.Fatal(errors.Wrap(errors.WithStack(err), "failed to load config"))
 	}
 
+	// get logger
+	logger.SetLogLevel(cfg.Log.Level)
+	log := logger.Get()
+
+	// token store
 	tokenRepo, err := store.NewMemoryTokenStore()
 	if err != nil {
-		panic(err)
+		log.Fatal().Err(errors.WithStack(err)).Msg("failed to create token store")
 	}
 
+	// client store for mock user
 	clientRepo := store.NewClientStore()
-
-	// mock user
-	clientRepo.Set("client_id", &models.Client{
+	if err := clientRepo.Set("client_id", &models.Client{
 		ID:     "client_id",
 		Secret: "client_secret",
+	}); err != nil {
+		log.Fatal().Err(errors.WithStack(err)).Msg("failed to set mock client")
+	}
+
+	manager := auth.NewManager(cfg, tokenRepo, clientRepo)
+	h := handler.New(manager)
+	httpServer := &http.Server{
+		Addr:         ":" + cfg.HTTP.Port,
+		Handler:      h.Routes(),
+		ReadTimeout:  cfg.HTTP.Timeout,
+		WriteTimeout: cfg.HTTP.Timeout,
+	}
+
+	var group run.Group
+
+	// http server
+	group.Add(func() error {
+		log.Info().Msg("http server listening on port " + cfg.HTTP.Port)
+
+		return httpServer.ListenAndServe()
+	}, func(err error) {
+		if errors.Is(err, http.ErrServerClosed) {
+			log.Info().Msg("http server closed")
+		} else {
+			log.Error().Err(err).Msg("http server stopped with error")
+		}
 	})
 
-	srv := auth.New(time.Duration(cfg.JWT.AccessTokenExpiresIn), []byte(cfg.JWT.Secret), tokenRepo, clientRepo)
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 
-	h := handler.New(srv)
-	s := server.New(cfg.HTTP.Port, time.Duration(cfg.HTTP.Timeout), h.Routes())
+	// graceful shutdown
+	group.Add(func() error {
+		<-ctx.Done()
 
-	go func() {
-		if err := s.Run(); err != nil {
-			log.Printf("failed to run the http server: %v\n", err.Error())
+		log.Info().Msg("start graceful shutdown")
+		defer log.Info().Msg("graceful shutdown completed")
+
+		return httpServer.Shutdown(context.Background())
+	}, func(err error) {
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal().Err(err).Msg("graceful shutdown interrupted")
 		}
-	}()
+	})
 
-	log.Println("server starts")
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
-	<-stop
-
-	if err := s.Shutdown(context.Background()); err != nil {
-		log.Printf("failed to shut down the http server: %v\n", err.Error())
+	if err := group.Run(); err != nil {
+		if errors.Is(err, http.ErrServerClosed) {
+			log.Info().Msg("service stopped")
+		} else {
+			log.Fatal().Err(err).Msg("service stopped with error")
+		}
 	}
 }
